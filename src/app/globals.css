@@ -1,0 +1,6 @@
+/* 只保留最基本的，MUI 会处理大部分样式 */
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #f0f2f5; /* 浅灰背景 */
+}
