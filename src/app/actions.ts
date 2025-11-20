@@ -1,87 +1,48 @@
+// src/app/actions.ts
 'use server'
 
+// ... 保持引入不变 ...
 import { r2Client, R2_BUCKET_NAME, R2_PUBLIC_URL } from "@/lib/r2";
-import { ListObjectsV2Command, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { revalidatePath } from "next/cache";
+import { ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 
-const METADATA_FILE = "_metadata.json";
+// ... 保持其他辅助函数不变 ...
 
-export interface FileData {
-  key: string;
-  size: number;
-  lastModified: string;
-  url: string;
-  note?: string;
-}
-
-// 读取存储在 R2 中的备注 JSON 文件
-async function getMetadataStore(): Promise<Record<string, string>> {
+// 修改 getFiles 函数
+export async function getFiles() {
   try {
-    const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: METADATA_FILE });
-    const response = await r2Client.send(command);
-    if (!response.Body) return {};
-    const str = await response.Body.transformToString();
-    return JSON.parse(str);
-  } catch (e: any) {
-    // 如果文件不存在，视为没有备注
-    return {};
-  }
-}
+    // 检查环境变量是否存在 (调试用)
+    if (!process.env.R2_ACCOUNT_ID) throw new Error("R2_ACCOUNT_ID 未设置");
+    if (!process.env.R2_BUCKET_NAME) throw new Error("R2_BUCKET_NAME 未设置");
 
-// 获取文件列表并合并备注
-export async function getFiles(): Promise<FileData[]> {
-  try {
     const listCommand = new ListObjectsV2Command({ Bucket: R2_BUCKET_NAME });
     
-    // 并行请求：文件列表 + 备注文件
-    const [listRes, metadata] = await Promise.all([
-      r2Client.send(listCommand),
-      getMetadataStore()
-    ]);
+    // 尝试连接 R2
+    const listRes = await r2Client.send(listCommand);
 
-    if (!listRes.Contents) return [];
-
-    return listRes.Contents
-      .filter(file => file.Key !== METADATA_FILE) // 隐藏系统文件
+    // 如果连接成功，处理数据
+    const files = (listRes.Contents || [])
+      .filter(file => file.Key !== "_metadata.json")
       .map(file => ({
         key: file.Key!,
         size: file.Size || 0,
         lastModified: file.LastModified?.toISOString() || "",
         url: `${R2_PUBLIC_URL}/${file.Key}`,
-        note: metadata[file.Key!] || "" // 注入备注
+        // 暂时不获取备注，先确保列表能出来
+        note: "" 
       }))
       .sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
-  } catch (e) {
-    console.error("Fetch error:", e);
-    return [];
+
+    return { success: true, files }; // 返回对象结构
+
+  } catch (e: any) {
+    console.error("详细错误信息:", e);
+    // 返回错误信息给前端
+    return { 
+      success: false, 
+      files: [], 
+      error: e.message || "未知错误", 
+      stack: JSON.stringify(e) 
+    };
   }
 }
-
-// 保存备注到 R2
-export async function saveFileNote(key: string, note: string) {
-  try {
-    const currentMetadata = await getMetadataStore();
-    
-    if (note && note.trim() !== "") {
-      currentMetadata[key] = note;
-    } else {
-      delete currentMetadata[key];
-    }
-
-    const putCommand = new PutObjectCommand({
-      Bucket: R2_BUCKET_NAME,
-      Key: METADATA_FILE,
-      Body: JSON.stringify(currentMetadata, null, 2),
-      ContentType: "application/json",
-      // 防止缓存导致备注读取滞后
-      CacheControl: "no-cache" 
-    });
-    
-    await r2Client.send(putCommand);
-    revalidatePath('/'); // 刷新页面缓存
-    return { success: true };
-  } catch (e) {
-    console.error("Save error:", e);
-    throw new Error("保存失败");
-  }
-}
+// ... 保持 saveFileNote 不变 ...
